@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>搬砖叠塔 · Brick Stack</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%; overflow: hidden;
+    background: radial-gradient(circle at 50% 30%, #16263a, #0a1320);
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+  }
+  canvas { display: block; background: #000; box-shadow: 0 0 60px rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// 画布自适应：手机全宽，桌面限宽 480 居中（像玩手机游戏）
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.min(window.innerWidth, 480);
+  const H = window.innerHeight;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  return { W, H, dpr };
+}
+
+class Game {
+  constructor(dim) {
+    this.W = dim.W; this.H = dim.H; this.dpr = dim.dpr;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); // 逻辑像素绘制
+    this.blockH = Math.max(22, Math.round(this.H * 0.04));
+    this.baseScreenY = this.H - 90;
+    this.best = Number(localStorage.getItem('brickstack_best')) || 0;
+    this._last = 0;
+    this.reset();
+  }
+
+  reset() {
+    this.state = 'ready';            // ready | playing | over
+    this.score = 0;
+    this.camera = 0; this.targetCamera = 0;
+    this.fragments = [];
+    this.perfectFlash = 0;
+    const baseW = this.W * 0.6;
+    const baseX = (this.W - baseW) / 2;
+    this.stack = [{ x: baseX, w: baseW, color: this.colorAt(0) }];
+    this.spawnMoving();
+  }
+
+  spawnMoving() {
+    const top = this.stack[this.stack.length - 1];
+    this.speed = Math.min(6.5, 2.2 + this.score * 0.06);
+    const fromLeft = this.stack.length % 2 === 0;
+    this.moving = {
+      w: top.w,
+      x: fromLeft ? 0 : this.W - top.w,
+      dir: fromLeft ? 1 : -1,
+      color: this.colorAt(this.stack.length),
+    };
+  }
+
+  colorAt(i) { return `hsl(${(200 + i * 14) % 360}, 62%, 56%)`; }
+
+  screenY(i) { return this.baseScreenY - i * this.blockH + this.camera; }
+
+  onTap() {
+    if (this.state === 'ready') { this.state = 'playing'; return; }
+    if (this.state === 'over') { this.reset(); return; }
+    this.place();
+  }
+
+  place() {
+    const top = this.stack[this.stack.length - 1];
+    const cur = this.moving;
+    const y = this.screenY(this.stack.length);
+    const left = Math.max(cur.x, top.x);
+    const right = Math.min(cur.x + cur.w, top.x + top.w);
+    const overlap = right - left;
+
+    if (overlap <= 0) {
+      this.fragments.push({ x: cur.x, y, w: cur.w, vy: 0, vx: cur.dir * 2.5, color: cur.color });
+      this.state = 'over';
+      return;
+    }
+
+    const diff = Math.abs(cur.x - top.x);
+    let newX, newW;
+    if (diff < 6) {                       // 完美对齐：吸附 + bonus
+      newX = top.x; newW = top.w;
+      this.perfectFlash = 1; this.score += 2;
+    } else {                              // 削掉超出部分
+      this.score += 1; newX = left; newW = overlap;
+      if (cur.x < top.x) this.fragments.push({ x: cur.x, y, w: top.x - cur.x, vy: 0, vx: -2.5, color: cur.color });
+      else this.fragments.push({ x: right, y, w: (cur.x + cur.w) - right, vy: 0, vx: 2.5, color: cur.color });
+    }
+
+    this.stack.push({ x: newX, w: newW, color: cur.color });
+    if (this.score > this.best) { this.best = this.score; localStorage.setItem('brickstack_best', this.best); }
+    const topIndex = this.stack.length - 1;
+    this.targetCamera = Math.max(0, topIndex * this.blockH - (this.baseScreenY - this.H * 0.45));
+    this.spawnMoving();
+  }
+
+  update(dt) {
+    this.camera += (this.targetCamera - this.camera) * Math.min(1, dt * 8);
+    if (this.state === 'playing') {
+      const m = this.moving;
+      m.x += m.dir * this.speed;
+      if (m.x <= 0) { m.x = 0; m.dir = 1; }
+      if (m.x + m.w >= this.W) { m.x = this.W - m.w; m.dir = -1; }
+    }
+    for (const f of this.fragments) { f.vy += 0.6; f.y += f.vy; f.x += f.vx; }
+    this.fragments = this.fragments.filter(f => f.y < this.H + 60);
+    if (this.perfectFlash > 0) this.perfectFlash = Math.max(0, this.perfectFlash - dt * 2);
+  }
+
+  render() {
+    const g = ctx.createLinearGradient(0, 0, 0, this.H);
+    const depth = Math.min(40, this.stack.length);
+    g.addColorStop(0, `hsl(210, 40%, ${22 - depth * 0.2}%)`);
+    g.addColorStop(1, `hsl(210, 45%, ${12 - depth * 0.1}%)`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, this.W, this.H);
+
+    for (let i = 0; i < this.stack.length; i++) {
+      const b = this.stack[i]; const y = this.screenY(i);
+      if (y > this.H + this.blockH || y < -this.blockH) continue;
+      this.drawBrick(b.x, y, b.w, b.color);
+    }
+    if (this.state === 'playing') this.drawBrick(this.moving.x, this.screenY(this.stack.length), this.moving.w, this.moving.color);
+    for (const f of this.fragments) { ctx.globalAlpha = 0.85; this.drawBrick(f.x, f.y, f.w, f.color); ctx.globalAlpha = 1; }
+
+    if (this.perfectFlash > 0) {
+      const top = this.stack[this.stack.length - 1]; const y = this.screenY(this.stack.length - 1);
+      ctx.strokeStyle = `rgba(255,255,255,${this.perfectFlash})`; ctx.lineWidth = 2;
+      this.roundRectPath(top.x - 2, y - 2, top.w + 4, this.blockH + 4, 5); ctx.stroke();
+      ctx.fillStyle = `rgba(255,255,255,${this.perfectFlash})`; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('PERFECT +2', top.x + top.w / 2, y - 8);
+    }
+
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.font = 'bold 46px sans-serif'; ctx.fillText(String(this.score), this.W / 2, 70);
+    ctx.font = '14px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillText(`最高 ${this.best}`, this.W / 2, 96);
+
+    if (this.state === 'ready') this.drawCenterText(['搬砖叠塔', '', '对齐放下砖块，越叠越高', '', '▶ 点击 / 空格 开始搬砖']);
+    if (this.state === 'over') { this.drawMask(); this.drawCenterText(['这栋楼塌了 🧱', '', `本次盖了 ${this.score} 层`, `最高纪录 ${this.best} 层`, '', '点击重新搬砖']); }
+  }
+
+  drawBrick(x, y, w, color) {
+    ctx.fillStyle = color; this.roundRectPath(x, y, w, this.blockH, 4); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; this.roundRectPath(x, y, w, Math.max(3, this.blockH * 0.28), 4); ctx.fill();
+  }
+
+  roundRectPath(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath(); ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  drawMask() { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, this.W, this.H); }
+
+  drawCenterText(lines) {
+    ctx.textAlign = 'center';
+    const cy = this.H * 0.4, lh = 30;
+    lines.forEach((line, i) => {
+      if (i === 0) { ctx.font = 'bold 30px sans-serif'; ctx.fillStyle = '#fff'; }
+      else { ctx.font = '16px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.85)'; }
+      ctx.fillText(line, this.W / 2, cy + i * lh);
+    });
+  }
+
+  tick(ts) {
+    const dt = this._last ? Math.min(0.05, (ts - this._last) / 1000) : 0.016;
+    this._last = ts;
+    this.update(dt); this.render();
+  }
+}
+
+// ---- 启动：单一渲染循环，输入只绑一次 ----
+let game = new Game(sizeCanvas());
+window.game = game; // 方便调试
+
+function doTap() { game.onTap(); }
+canvas.addEventListener('mousedown', doTap);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); doTap(); }, { passive: false });
+window.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); doTap(); } });
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { game = new Game(sizeCanvas()); window.game = game; }, 200);
+});
+
+function frame(ts) { game.tick(ts); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
