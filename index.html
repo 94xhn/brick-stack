@@ -26,8 +26,8 @@ const ctx = canvas.getContext('2d');
 // 画布自适应：手机全宽，桌面限宽 480 居中（像玩手机游戏）
 function sizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const W = Math.min(window.innerWidth, 480);
-  const H = window.innerHeight;
+  const W = Math.min(window.innerWidth || document.documentElement.clientWidth || 400, 480);
+  const H = window.innerHeight || document.documentElement.clientHeight || 640;
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
   canvas.width = Math.round(W * dpr);
